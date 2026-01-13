@@ -1,13 +1,22 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+
+import { Injectable, NotFoundException, Inject } from '@nestjs/common';
 import { EventsService } from '../events/events.service';
 import { CreatePersonDto } from './dto/create-person.dto';
 import { UpdatePersonDto } from './dto/update-person.dto';
 import { PersonEntity } from './entities/person.entity';
 import { v4 as uuidv4 } from 'uuid';
+import { Collection } from 'mongodb';
+// Use nest-mongodb or sua própria injeção de Collection
+// Exemplo: @Inject('PERSON_COLLECTION')
+
 
 @Injectable()
 export class PersonService {
-  constructor(private readonly eventsService: EventsService) {}
+  constructor(
+    private readonly eventsService: EventsService,
+    @Inject('PERSON_COLLECTION')
+    private readonly personCollection: Collection<PersonEntity>,
+  ) {}
 
   async create(data: CreatePersonDto): Promise<PersonEntity> {
     const personId = uuidv4();
@@ -41,72 +50,15 @@ export class PersonService {
   }
 
   async findAll(): Promise<PersonEntity[]> {
-    const events = await this.eventsService.getEventsByAggregateType('Person');
-    const personsMap = new Map<string, PersonEntity>();
-
-    // Reconstruct state from events
-    for (const event of events.reverse()) {
-      const { aggregateId, eventType, eventData } = event;
-
-      if (eventType === 'PersonCreated') {
-        personsMap.set(aggregateId, new PersonEntity({
-          id: eventData.id,
-          name: eventData.name,
-          email: eventData.email,
-          createdAt: new Date(eventData.createdAt),
-          updatedAt: new Date(eventData.createdAt),
-        }));
-      } else if (eventType === 'PersonUpdated') {
-        const person = personsMap.get(aggregateId);
-        if (person) {
-          person.name = eventData.name || person.name;
-          person.email = eventData.email || person.email;
-          person.updatedAt = new Date(eventData.updatedAt);
-        }
-      } else if (eventType === 'PersonDeleted') {
-        personsMap.delete(aggregateId);
-      }
-    }
-
-    // Return all non-deleted persons
-    return Array.from(personsMap.values())
-      .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+    const persons = await this.personCollection.find({}).toArray();
+    return persons.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
   }
 
   async findOne(id: string): Promise<PersonEntity> {
-    const events = await this.eventsService.getEventsByAggregateId(id);
-
-    if (events.length === 0) {
-      throw new NotFoundException(`Person with ID ${id} not found`);
-    }
-
-    let person: PersonEntity | null = null;
-
-    // Reconstruct state from events
-    for (const event of events) {
-      const { eventType, eventData } = event;
-
-      if (eventType === 'PersonCreated') {
-        person = new PersonEntity({
-          id: eventData.id,
-          name: eventData.name,
-          email: eventData.email,
-          createdAt: new Date(eventData.createdAt),
-          updatedAt: new Date(eventData.createdAt),
-        });
-      } else if (eventType === 'PersonUpdated' && person) {
-        person.name = eventData.name || person.name;
-        person.email = eventData.email || person.email;
-        person.updatedAt = new Date(eventData.updatedAt);
-      } else if (eventType === 'PersonDeleted' && person) {
-        person = null;
-      }
-    }
-
+    const person = await this.personCollection.findOne({ id });
     if (!person) {
       throw new NotFoundException(`Person with ID ${id} not found`);
     }
-
     return person;
   }
 
